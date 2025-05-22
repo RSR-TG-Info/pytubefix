@@ -347,8 +347,6 @@ class YouTube:
             video = Stream(
                 stream=stream,
                 monostate=self.stream_monostate,
-                po_token=self.po_token,
-                video_playback_ustreamer_config=self.video_playback_ustreamer_config
             )
             self._fmt_streams.append(video)
 
@@ -450,14 +448,6 @@ class YouTube:
                 }
             }
         return self._signature_timestamp
-
-    @property
-    def video_playback_ustreamer_config(self):
-        return self.vid_info[
-            'playerConfig'][
-            'mediaCommonConfig'][
-            'mediaUstreamerRequestConfig'][
-            'videoPlaybackUstreamerConfig']
 
     @property
     def vid_info(self):
@@ -590,7 +580,15 @@ class YouTube:
         :rtype: List[Caption]
         """
 
-        innertube_response = InnerTube(client='WEB').player(self.video_id)
+        innertube_response = InnerTube(
+            client='WEB' if not self.use_oauth else self.client,
+            use_oauth=self.use_oauth,
+            allow_cache=self.allow_oauth_cache,
+            token_file=self.token_file,
+            oauth_verifier=self.oauth_verifier,
+            use_po_token=self.use_po_token,
+            po_token_verifier=self.po_token_verifier
+        ).player(self.video_id)
 
         raw_tracks = (
             innertube_response.get("captions", {})
