@@ -347,8 +347,6 @@ class YouTube:
             video = Stream(
                 stream=stream,
                 monostate=self.stream_monostate,
-                po_token=self.po_token,
-                video_playback_ustreamer_config=self.video_playback_ustreamer_config
             )
             self._fmt_streams.append(video)
 
@@ -450,14 +448,6 @@ class YouTube:
                 }
             }
         return self._signature_timestamp
-
-    @property
-    def video_playback_ustreamer_config(self):
-        return self.vid_info[
-            'playerConfig'][
-            'mediaCommonConfig'][
-            'mediaUstreamerRequestConfig'][
-            'videoPlaybackUstreamerConfig']
 
     @property
     def vid_info(self):
@@ -599,14 +589,6 @@ class YouTube:
             use_po_token=self.use_po_token,
             po_token_verifier=self.po_token_verifier
         ).player(self.video_id)
-
-
-
-
-
-
-
-
 
         raw_tracks = (
             innertube_response.get("captions", {})
@@ -779,10 +761,16 @@ class YouTube:
 
         :rtype: str
         """
+        self._author = self.vid_info.get("videoDetails", {}).get(
+            "author", "unknown"
+        )
+
         if self._title:
             return self._title
 
         try:
+            # Some clients may not return the title in the `player` endpoint,
+            # so if it is not found we will look for it in the `next` endpoint
             if 'title' in self.vid_info['videoDetails']:
                 self._title = self.vid_info['videoDetails']['title']
                 logger.debug('Found title in vid_info')
@@ -799,9 +787,11 @@ class YouTube:
                     if 'videoMetadataRenderer' in contents:
                         self._title = contents['videoMetadataRenderer']['title']['runs'][0]['text']
                     else:
+                        # JSON tree for titles in videos available on YouTube music
                         self._title = contents['musicWatchMetadataRenderer']['title']['simpleText']
 
-                
+                # The type of video with this structure is not yet known.
+                # First reported in: https://github.com/JuanBindez/pytubefix/issues/351
                 elif 'twoColumnWatchNextResults' in self.vid_details['contents']:
                     self._title = self.vid_details['contents'][
                         'twoColumnWatchNextResults'][
@@ -815,6 +805,8 @@ class YouTube:
 
                 logger.debug('Found title in vid_details')
         except KeyError as e:
+            # Check_availability will raise the correct exception in most cases
+            #  if it doesn't, ask for a report.
             self.check_availability()
             raise exceptions.PytubeFixError(
                 (
@@ -863,7 +855,6 @@ class YouTube:
         """
         return int(self.vid_info.get("videoDetails", {}).get("viewCount", "0"))
 
-    
     @property
     def author(self) -> str:
         """Get the video author.
@@ -871,47 +862,9 @@ class YouTube:
         """
         if self._author:
             return self._author
-    
-        author_from_vid_info = self.vid_info.get("videoDetails", {}).get("author")
-        if author_from_vid_info:
-            self._author = author_from_vid_info
-            return self._author
-    
-        try:
-            if 'twoColumnWatchNextResults' in self.vid_details['contents']:
-                results = self.vid_details['contents']['twoColumnWatchNextResults']['results']['results']['contents']
-                for content in results:
-                    if 'videoSecondaryInfoRenderer' in content:
-                        owner_info = content['videoSecondaryInfoRenderer'].get('owner', {})
-                        if 'videoOwnerRenderer' in owner_info:
-                            channel_info = owner_info['videoOwnerRenderer']
-                            if 'title' in channel_info:
-                                if 'runs' in channel_info['title']:
-                                    self._author = channel_info['title']['runs'][0]['text']
-                                elif 'simpleText' in channel_info['title']:
-                                    self._author = channel_info['title']['simpleText']
-                                return self._author
-        
-            elif 'singleColumnWatchNextResults' in self.vid_details['contents']:
-                results = self.vid_details['contents']['singleColumnWatchNextResults']['results']['results']['contents']
-                for content in results:
-                    if 'itemSectionRenderer' in content:
-                        items = content['itemSectionRenderer']['contents']
-                        for item in items:
-                            if 'videoSecondaryInfoRenderer' in item:
-                                owner_info = item['videoSecondaryInfoRenderer'].get('owner', {})
-                                if 'videoOwnerRenderer' in owner_info:
-                                    channel_info = owner_info['videoOwnerRenderer']
-                                    if 'title' in channel_info:
-                                        if 'runs' in channel_info['title']:
-                                            self._author = channel_info['title']['runs'][0]['text']
-                                        elif 'simpleText' in channel_info['title']:
-                                            self._author = channel_info['title']['simpleText']
-                                        return self._author
-        except (KeyError, IndexError, TypeError) as e:
-            pass
-    
-        self._author = "unknown"
+        self._author = self.vid_info.get("videoDetails", {}).get(
+            "author", "unknown"
+        )
         return self._author
 
     @author.setter
