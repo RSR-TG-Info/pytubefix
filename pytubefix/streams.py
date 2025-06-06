@@ -97,6 +97,7 @@ class Stream:
         self.is_3d = itag_profile["is_3d"]
         self.is_hdr = itag_profile["is_hdr"]
         self.is_live = itag_profile["is_live"]
+        self.is_drc = stream.get('isDrc', False)
         self._is_sabr = stream.get('is_sabr', False)
         self.durationMs = stream['approxDurationMs']
         self.last_Modified = stream['lastModified']
@@ -407,7 +408,7 @@ class Stream:
                         write_chunk(chunk, bytes_remaining)
                 else:
                     logger.debug('This stream is SABR. Starting ServerAbrStream')
-                    ServerAbrStream(stream=self, write_chunk=write_chunk).start()
+                    ServerAbrStream(stream=self, write_chunk=write_chunk, monostate=self._monostate).start()
 
             except HTTPError as e:
                 if e.code != 404:
@@ -428,7 +429,7 @@ class Stream:
                         write_chunk(chunk, bytes_remaining)
                 else:
                     logger.debug('This stream is SABR. Starting ServerAbrStream')
-                    ServerAbrStream(stream=self, write_chunk=write_chunk).start()
+                    ServerAbrStream(stream=self, write_chunk=write_chunk, monostate=self._monostate).start()
 
             self.on_complete(file_path)
             return file_path
