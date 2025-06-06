@@ -1,13 +1,15 @@
 # All credits to https://github.com/LuanRT/googlevideo
 
 import base64
+import logging
 from enum import Enum
 from typing import Optional
 from collections.abc import Callable
 from urllib.request import Request, urlopen
 
-from pytubefix.exceptions import Sabr
 from pytubefix.sabr.core.UMP import UMP
+from pytubefix.monostate import Monostate
+from pytubefix.exceptions import SABRError
 from pytubefix.sabr.video_streaming.sabr_error import SabrError
 from pytubefix.sabr.video_streaming.media_header import MediaHeader
 from pytubefix.sabr.core.chunked_data_buffer import ChunkedDataBuffer
@@ -18,8 +20,9 @@ from pytubefix.sabr.video_streaming.stream_protection_status import StreamProtec
 from pytubefix.sabr.video_streaming.video_playback_abr_request import VideoPlaybackAbrRequest
 from pytubefix.sabr.video_streaming.format_initialization_metadata import FormatInitializationMetadata
 
+logger = logging.getLogger(__name__)
 
-# https://github.com/gsuberland/UMP_Format/blob/main/UMP_Format.md
+# https://github.com/davidzeng0/innertube/blob/main/googlevideo/ump.md
 class PART(Enum):
     ONESIE_HEADER = 10
     ONESIE_DATA = 11
@@ -58,13 +61,16 @@ class PART(Enum):
     CACHE_LOAD_POLICY = 63
     LAWNMOWER_MESSAGING_POLICY = 64
     PREWARM_CONNECTION = 65
+    PLAYBACK_DEBUG_INFO = 66
+    SNACKBAR_MESSAGE = 67
 
 
 class ServerAbrStream:
-    def __init__(self, stream, write_chunk: Callable):
+    def __init__(self, stream, write_chunk: Callable, monostate: Monostate):
 
         self.stream = stream
         self.write_chunk = write_chunk
+        self.youtube = monostate.youtube
         self.po_token = self.stream.po_token
         self.server_abr_streaming_url = self.stream.url
         self.video_playback_ustreamer_config = self.stream.video_playback_ustreamer_config
@@ -75,6 +81,8 @@ class ServerAbrStream:
         self.playback_cookie = None
         self.header_id_to_format_key_map = {}
         self.previous_sequences = {}
+        self.RELOAD = False
+        self.maximum_reload_attempt = 3
 
 
     def emit(self, data):
@@ -103,14 +111,16 @@ class ServerAbrStream:
             'stickyResolution': int(self.stream.resolution.replace('p', '')) if video_format else 720,
             'playerTimeMs': 0,
             'visibility': 0,
+            'drcEnabled': self.stream.is_drc,
             # 0 = BOTH, 1 = AUDIO (video-only is no longer supported by YouTube)
             'enabledTrackTypesBitfield': 0 if video_format else 1
         }
-        while client_abr_state['playerTimeMs'] < self.totalDurationMs:
+        while client_abr_state['playerTimeMs'] < self.totalDurationMs and self.maximum_reload_attempt > 0:
             data = self.fetch_media(client_abr_state, audio_format, video_format)
 
             if data.get("sabr_error", None):
-                raise Sabr(data.get('sabr_error').type)
+                logger.debug(data.get('sabr_error').type)
+                self.reload()
 
             self.emit(data)
 
@@ -125,8 +135,20 @@ class ServerAbrStream:
                 sequence_numbers = [seq.get("sequenceNumber", 0) for seq in fmt["sequenceList"]]
                 self.previous_sequences[format_key] = sequence_numbers
 
-            if not main_format["sequenceList"]:
-                raise Sabr("Error getting chunks. The Abr server did not return any chunks")
+
+            if (    not self.RELOAD and (
+                        main_format is None or
+                        ("sequenceList" in main_format and not main_format.get("sequenceList", None))
+                    )
+            ):
+                logger.debug("The Abr server did not return any chunks")
+                self.reload()
+
+            if self.maximum_reload_attempt > 0 and self.RELOAD:
+                self.RELOAD = False
+                continue
+            elif self.maximum_reload_attempt <= 0:
+                raise SABRError("Maximum reload attempts reached")
 
             if (
                     not main_format or
@@ -151,17 +173,20 @@ class ServerAbrStream:
                 'playbackCookie': PlaybackCookie.encode(self.playback_cookie).finish() if self.playback_cookie else None,
                 'clientInfo': {
                     'clientName': 1,
-                    'clientVersion': '2.2040620.05.00',
+                    'clientVersion': '2.20250523.01.00',
                     'osName': 'Windows',
-                    'osVersion': '10.0'
+                    'osVersion': '10.0',
+                    'platform': 'DESKTOP'
                 }
             },
             'bufferedRanges': [fmt["_state"] for fmt in self.initialized_formats],
             'field1000': []
         }).finish()
 
-        request = Request(self.stream.url, method="POST", data=bytes(body))
-
+        base_headers = {
+            "User-Agent": "Mozilla/5.0", "accept-language": "en-US,en", "Content-Type": "application/vnd.yt-ump",
+        }
+        request = Request(self.server_abr_streaming_url, headers=base_headers, method="POST", data=bytes(body))
         return self.parse_ump_response(bytes(urlopen(request).read()))
 
     def parse_ump_response(self, response):
@@ -201,10 +226,30 @@ class ServerAbrStream:
             elif part['type'] == PART.SABR_REDIRECT.value:
                 nonlocal sabr_redirect
                 sabr_redirect = self.process_sabr_redirect(data)
+                logger.debug("SABR_REDIRECT")
 
             elif part['type'] == PART.STREAM_PROTECTION_STATUS.value:
                 nonlocal stream_protection_status
                 stream_protection_status = StreamProtectionStatus.decode(data)
+
+            elif part['type'] == PART.RELOAD_PLAYER_RESPONSE.value:
+                print("RELOAD_PLAYER_RESPONSE")
+                self.reload()
+
+            elif part["type"] == PART.PLAYBACK_START_POLICY.value:
+                pass
+
+            elif part["type"] == PART.REQUEST_CANCELLATION_POLICY.value:
+                pass
+
+            elif part["type"] == PART.SABR_CONTEXT_UPDATE.value:
+                print("SABR_CONTEXT_UPDATE")
+                print(data)
+                self.reload()
+
+            else:
+                print(part["type"])
+                print(data)
 
         ump.parse(callback)
 
@@ -319,6 +364,20 @@ class ServerAbrStream:
             self.formats_by_key[format_key] = self.initialized_formats[-1]
             return format_
         return None
+
+    def reload(self):
+        logger.debug("Refreshing SABR streaming URL")
+
+        self.RELOAD = True
+        self.maximum_reload_attempt -= 1
+
+        self.youtube.vid_info = None
+        refresh_url = self.youtube.server_abr_streaming_url
+        if not refresh_url:
+            raise ValueError("Invalid SABR refresh")
+        self.server_abr_streaming_url = refresh_url
+        self.video_playback_ustreamer_config = self.youtube.video_playback_ustreamer_config
+
 
     @staticmethod
     def base64_to_u8(base64_str):
