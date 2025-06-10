@@ -350,6 +350,8 @@ def _js_comp_op(op):
 
 def _js_ternary(cndn, if_true=True, if_false=False):
     """Simulate JS's ternary operator (cndn?if_true:if_false)"""
+    if cndn == "null":
+        print()
     if cndn in (False, None, 0, '', JS_Undefined):
         return if_false
     with contextlib.suppress(TypeError):
