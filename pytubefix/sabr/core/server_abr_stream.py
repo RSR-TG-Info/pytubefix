@@ -148,7 +148,7 @@ class ServerAbrStream:
                 self.RELOAD = False
                 continue
             elif self.maximum_reload_attempt <= 0:
-                raise SABRError("Maximum reload attempts reached")
+                raise SABRError("SABR Maximum reload attempts reached")
 
             if (
                     not main_format or
@@ -233,7 +233,7 @@ class ServerAbrStream:
                 stream_protection_status = StreamProtectionStatus.decode(data)
 
             elif part['type'] == PART.RELOAD_PLAYER_RESPONSE.value:
-                print("RELOAD_PLAYER_RESPONSE")
+                logger.debug("RELOAD_PLAYER_RESPONSE")
                 self.reload()
 
             elif part["type"] == PART.PLAYBACK_START_POLICY.value:
@@ -243,13 +243,9 @@ class ServerAbrStream:
                 pass
 
             elif part["type"] == PART.SABR_CONTEXT_UPDATE.value:
-                print("SABR_CONTEXT_UPDATE")
-                print(data)
-                self.reload()
-
-            else:
-                print(part["type"])
-                print(data)
+                # TODO: Find out how to implement this part
+                logger.debug("SABR_CONTEXT_UPDATE")
+                ...
 
         ump.parse(callback)
 
